@@ -7,6 +7,8 @@ param (
    $hostname
 )
 
+$GetRegScriptBlock = {
+
 $regpaths = @(   
 "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run",
 "HKLM:\Software\Microsoft\Windows\CurrentVersion\RunOnce",
@@ -14,10 +16,7 @@ $regpaths = @(
 "HKCU:\\Software\Microsoft\Windows\CurrentVersion\RunOnce"
 
 )
-
 $RegStartup = @{}
-$ServiceStartup = @{}
-
 foreach ($path in $regpaths){
 
     $key = Get-ItemProperty -Path $path
@@ -30,16 +29,38 @@ foreach ($path in $regpaths){
 
 }
 
+Return $RegStartup
+}
+
+
+$GetServiceScriptBlock = {
+$ServiceStartup = @{}
 $services = Get-CimInstance -ClassName Win32_Service | where-object {$_.StartMode -eq "Auto"} | select Name,Pathname
 foreach ($service in $services){
 
     $ServiceStartup[$service.Name] = $service.Pathname
 }
 
-return @($RegStartup, $ServiceStartup)
+return $ServiceStartup
 
 }
 
+$query0 = "SELECT MachineID from Hosts WHERE hostname = ('$($hostname)')"
+$machineid = Invoke-SqliteQuery -Database $Database -Query $query0
+$machineid = $machineid.MachineID
+
+
+$RegistryStartupItems = invoke-command -ComputerName $hostname -ScriptBlock $GetRegScriptBlock
+foreach ($item in $RegistryStartupItems.keys){
+    $query1 = "INSERT INTO RegistryAutoStart (MachineID, name, value) VALUES ( '$($machineid)',  '$($item)', '$($RegistryStartupItems[$item])')"
+    Invoke-SqliteQuery -Database $Database -query $query1}
+
+$ServicesStartupItems = invoke-command -ComputerName $hostname -ScriptBlock $GetServiceScriptBlock
+foreach ($item in $ServicesStartupItems.keys){
+    $query2 = "INSERT INTO ServicesAutoStart (MachineID, ServiceName, ServicePath) VALUES ( '$($machineid)', '$($item)', '$($ServicesStartupItems[$item])')"
+    Invoke-SqliteQuery -Database $Database -query $query2}
+
+}
 
 
 function CreateDatabase {
@@ -89,6 +110,9 @@ function AddHostInfo{
 
     $query = "INSERT INTO Hosts (hostname, ipaddress, osname) VALUES ('$($hostname)', '$($IPaddress)', '$($OSname)')"
     Invoke-SqliteQuery -Database $Database -query $query
+    
+  
+
 }
 
 
@@ -102,7 +126,7 @@ $hosts = get-content -Path $filepath
 foreach ($PC in $hosts){
 
    AddHostInfo($PC)
-   
+   GetStartupItems($PC)
 }
 
 
