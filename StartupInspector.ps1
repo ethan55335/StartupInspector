@@ -21,7 +21,7 @@ foreach ($path in $regpaths){
 
     $key = Get-ItemProperty -Path $path
 
-    $values = $key.PSObject.Properties | Select-Object Name, Value
+    $values = $key.PSObject.Properties | Select-Object Name, Value | Where-Object { $_.Name -NotMatch "PSPath|PSParentPath|PSProvider|PSChildName|PSDrive"}
 
    foreach ($value in $values){
     $RegStartup[$value.name] = $value.Value
@@ -45,10 +45,37 @@ return $ServiceStartup
 
 }
 
+$GetScheduledTaskScriptBlock = {
+
+
+$ScheduledTasks = @{}
+
+get-scheduledtask | foreach-object {
+
+    $Name = $_.TaskName
+    $PathToBinary = $_.Actions.Execute
+    if ($PathToBinary.Length -gt 1 ){$ScheduledTasks[$name] = $PathToBinary}
+    
+}
+
+return $ScheduledTasks
+
+
+
+
+}
+
+
 $query0 = "SELECT MachineID from Hosts WHERE hostname = ('$($hostname)')"
 $machineid = Invoke-SqliteQuery -Database $Database -Query $query0
 $machineid = $machineid.MachineID
 
+
+$ScheduledTasks = invoke-command -ComputerName $hostname -ScriptBlock $GetScheduledTaskScriptBlock
+foreach ($item in $ScheduledTasks.keys){
+    $query3 = "INSERT INTO ScheduledTasks (MachineID, taskname, binarypath) VALUES ( '$($machineid)',  '$($item)', '$($ScheduledTasks[$item])')"
+    Invoke-SqliteQuery -Database $Database -query $query3
+}
 
 $RegistryStartupItems = invoke-command -ComputerName $hostname -ScriptBlock $GetRegScriptBlock
 foreach ($item in $RegistryStartupItems.keys){
@@ -68,7 +95,8 @@ function CreateDatabase {
 $Database = "C:\Temp\tempdb.sqlite"
 $droptablehosts = "DROP TABLE IF EXISTS Hosts"
 $droptableregistry = "DROP TABLE IF EXISTS RegistryAutoStart"
-$droptableservices = "DROP TABLE IF EXISTS ServicesAutoStart"   
+$droptableservices = "DROP TABLE IF EXISTS ServicesAutoStart"
+$droptabletasks = "DROP TABLE IF EXISTS ScheduledTasks"   
 $query = "
     CREATE TABLE Hosts (
     MachineID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,12 +117,22 @@ $query3 = "
     ServiceName TEXT,
     ServicePath TEXT,
     FOREIGN KEY (MachineID) REFERENCES Hosts(MachineID))"
+$query4 = "
+    CREATE TABLE ScheduledTasks (
+    EntryID INTEGER PRIMARY KEY AUTOINCREMENT,
+    MachineID INTEGER,
+    TaskName TEXT,
+    BinaryPath TEXT,
+    FOREIGN KEY (MachineID) REFERENCES Hosts(MachineID))"
+
 Invoke-SqliteQuery -Database $Database -Query $droptablehosts
 Invoke-SqliteQuery -Database $Database -Query $droptableregistry
 Invoke-SqliteQuery -Database $Database -Query $droptableservices
+Invoke-SqliteQuery -Database $Database -Query $droptabletasks
 Invoke-SqliteQuery -Database $Database -Query $query
 Invoke-SqliteQuery -Database $Database -Query $query2
 Invoke-SqliteQuery -Database $Database -Query $query3
+Invoke-SqliteQuery -Database $Database -Query $query4
 
 return $Database
 }
