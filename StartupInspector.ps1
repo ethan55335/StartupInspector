@@ -82,6 +82,7 @@ $GetStartupFolderItemsScriptBlock = {
         $startup = Get-ChildItem $folderpath | Select-Object -ExpandProperty Fullname
         foreach ($item in $startup){
             if ($item -match ".lnk"){
+                $creationtime = Get-ChildItem $item | select-object -ExpandProperty CreationTime
                 $wshShell = New-Object -Comobject WScript.shell
                 $itemshortcut = $wshShell.CreateShortcut($item)
                 $itemshortcutpath = $itemshortcut.Targetpath
@@ -89,14 +90,17 @@ $GetStartupFolderItemsScriptBlock = {
                 $startupitems[$item] = @{
                     "Path" = $itemshortcutpath
                     "Filehash" = $filehash.hash
+                    "CreationTime" = $creationtime
                 }
 
             }
             else {
                 $filehash = get-filehash $item
+                $creationtime = get-childitem $item | select-object -ExpandProperty CreationTime
                 $startupitems[$item] = @{
                     "Path" = $item
                     "Filehash" = $filehash.hash
+                    "CreationTime" = $creationtime
                 }
             }
 
@@ -130,7 +134,7 @@ foreach ($item in $ServicesStartupItems.keys){
 
 $StartupFolderItems = invoke-command -ComputerName $hostname -ScriptBlock $GetStartupFolderItemsScriptBlock
 foreach ($item in $StartupFolderItems.keys){
-    $query4 = "INSERT INTO StartupFolderItems (MachineID, StartupName, FilePath, FileHash) VALUES ('$($machineid)', '$($item)','$($StartupFolderItems.$item.Path)', '$($StartupFolderItems.$item.FileHash)')"
+    $query4 = "INSERT INTO StartupFolderItems (MachineID, StartupName, FilePath, FileHash, CreationTime) VALUES ('$($machineid)', '$($item)','$($StartupFolderItems.$item.Path)', '$($StartupFolderItems.$item.FileHash)', '$($StartupFolderItems.$item.CreationTime)')"
     Invoke-SqliteQuery -Database $Database -query $query4
 }
 
@@ -179,6 +183,7 @@ $query5 = "
     StartupName TEXT,
     FilePath TEXT,
     FileHash TEXT,
+    CreationTime TEXT,
     FOREIGN KEY (MachineID) REFERENCES Hosts(MachineID))"
 
 Invoke-SqliteQuery -Database $Database -Query $droptablehosts
