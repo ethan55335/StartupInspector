@@ -1,4 +1,11 @@
 
+#StartupInspector.PS1
+#MIT License
+#Copyright (c) 2025 Ethan Fitzgerald
+
+
+
+
 import-module PSSqlite
 
 function GetStartupItems {
@@ -22,16 +29,26 @@ foreach ($path in $regpaths){
     $key = Get-ItemProperty -Path $path
 
     $values = $key.PSObject.Properties | Select-Object Name, Value | Where-Object { $_.Name -NotMatch "PSPath|PSParentPath|PSProvider|PSChildName|PSDrive"}
-   
    foreach ($value in $values){
-    $RegStartup[$value.name] = $value.Value
-   }
 
+    $valuepath = [regex]::Match($value.value  , 'C:.*?\.exe').Value
+    $filehash = get-filehash -Path $valuepath
+
+    $RegStartup[$value.name] = @{
+
+        "Value" = $value.value
+        "ValuePath" = $valuepath
+        "filehash" = $filehash.hash
+
+    }
+    
+
+}
 }
 
 Return $RegStartup
-}
 
+}
 
 $GetServiceScriptBlock = {
 $ServiceStartup = @{}
@@ -124,7 +141,7 @@ foreach ($item in $ScheduledTasks.keys){
 
 $RegistryStartupItems = invoke-command -ComputerName $hostname -ScriptBlock $GetRegScriptBlock
 foreach ($item in $RegistryStartupItems.keys){
-    $query1 = "INSERT INTO RegistryAutoStart (MachineID, name, value) VALUES ( '$($machineid)',  '$($item)', '$($RegistryStartupItems[$item])')"
+    $query1 = "INSERT INTO RegistryAutoStart (MachineID, name, value, valuepath, filehash) VALUES ( '$($machineid)',  '$($item)', '$($RegistryStartupItems.$item.value)', '$($RegistryStartupItems.$item.valuepath)', '$($RegistryStartupItems.$item.filehash)')"
     Invoke-SqliteQuery -Database $Database -query $query1}
 
 $ServicesStartupItems = invoke-command -ComputerName $hostname -ScriptBlock $GetServiceScriptBlock
@@ -161,6 +178,8 @@ $query2 = "
     MachineID INTEGER,
     Name TEXT,
     Value TEXT,
+    Valuepath TEXT,
+    Filehash TEXT,
     FOREIGN KEY (MachineID) REFERENCES Hosts(MachineID))"
 $query3 = "
     CREATE TABLE ServicesAutoStart (
