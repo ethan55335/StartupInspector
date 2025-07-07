@@ -33,12 +33,14 @@ foreach ($path in $regpaths){
 
     $valuepath = [regex]::Match($value.value  , 'C:.*?\.exe').Value
     $filehash = get-filehash -Path $valuepath
+    $creationtime = get-childitem -Path $valuepath | select-object -ExpandProperty Creationtime
 
     $RegStartup[$value.name] = @{
 
         "Value" = $value.value
         "ValuePath" = $valuepath
         "filehash" = $filehash.hash
+        "CreationTime" = $creationtime
 
     }
     
@@ -51,15 +53,24 @@ Return $RegStartup
 }
 
 $GetServiceScriptBlock = {
+
 $ServiceStartup = @{}
 $services = Get-CimInstance -ClassName Win32_Service | where-object {$_.StartMode -eq "Auto"} | select Name,Pathname
 foreach ($service in $services){
 
-    $ServiceStartup[$service.Name] = $service.Pathname
+    $servicepath = [regex]::Match($service.Pathname, 'C:.*?\.exe').Value     
+    $servicehash = get-filehash $servicepath -ErrorAction SilentlyContinue
+    $creationtime = get-childitem -path $servicepath | select-object -expandproperty CreationTime
+    $ServiceStartup[$service.Name] = @{
+        
+        "Service" = $service.Pathname
+        "ServicePath" = $servicepath
+        "ServiceHash" = $servicehash.hash
+        "Creationtime" = $creationtime
 }
 
+}
 return $ServiceStartup
-
 }
 
 $GetScheduledTaskScriptBlock = {
@@ -72,7 +83,22 @@ get-scheduledtask | foreach-object {
 
     $Name = $_.TaskName
     $PathToBinary = $_.Actions.Execute
-    if ($PathToBinary.Length -gt 1 ){$ScheduledTasks[$name] = $PathToBinary}
+    write-host "The path to the binary for $($name) is $($PathToBinary)"
+    $ResolvedPath = [Environment]::ExpandEnvironmentVariables($PathToBinary)
+    $ResolvedPath = $ResolvedPath.Trim('"')
+    $filehash = get-filehash -Path $ResolvedPath
+    $creationtime = get-childitem -Path $ResolvedPath | Select-Object -ExpandProperty Creationtime
+
+    if ($PathToBinary.Length -gt -1 ){
+        $ScheduledTasks[$name] = @{
+
+            "PathToBinary" = $PathToBinary
+            "ResolvedPath" = $ResolvedPath
+            "FileHash" = $filehash.hash
+            "CreationTime" = $creationtime
+
+        }
+    }
     
 }
 
@@ -135,18 +161,18 @@ $machineid = $machineid.MachineID
 
 $ScheduledTasks = invoke-command -ComputerName $hostname -ScriptBlock $GetScheduledTaskScriptBlock
 foreach ($item in $ScheduledTasks.keys){
-    $query3 = "INSERT INTO ScheduledTasks (MachineID, taskname, binarypath) VALUES ( '$($machineid)',  '$($item)', '$($ScheduledTasks[$item])')"
+    $query3 = "INSERT INTO ScheduledTasks (MachineID, taskname, binarypath, ResolvedPath, FileHash, CreationTime) VALUES ( '$($machineid)',  '$($item)', '$($ScheduledTasks.$item.PathToBinary)','$($ScheduledTasks.$item.ResolvedPath)','$($ScheduledTasks.$item.Filehash)','$($ScheduledTasks.$item.CreationTime)')"
     Invoke-SqliteQuery -Database $Database -query $query3
 }
 
 $RegistryStartupItems = invoke-command -ComputerName $hostname -ScriptBlock $GetRegScriptBlock
 foreach ($item in $RegistryStartupItems.keys){
-    $query1 = "INSERT INTO RegistryAutoStart (MachineID, name, value, valuepath, filehash) VALUES ( '$($machineid)',  '$($item)', '$($RegistryStartupItems.$item.value)', '$($RegistryStartupItems.$item.valuepath)', '$($RegistryStartupItems.$item.filehash)')"
+    $query1 = "INSERT INTO RegistryAutoStart (MachineID, name, value, valuepath, filehash, CreationTime) VALUES ( '$($machineid)',  '$($item)', '$($RegistryStartupItems.$item.value)', '$($RegistryStartupItems.$item.valuepath)', '$($RegistryStartupItems.$item.filehash)', '$($RegistryStartupItems.$item.CreationTime)')"
     Invoke-SqliteQuery -Database $Database -query $query1}
 
 $ServicesStartupItems = invoke-command -ComputerName $hostname -ScriptBlock $GetServiceScriptBlock
 foreach ($item in $ServicesStartupItems.keys){
-    $query2 = "INSERT INTO ServicesAutoStart (MachineID, ServiceName, ServicePath) VALUES ( '$($machineid)', '$($item)', '$($ServicesStartupItems[$item])')"
+    $query2 = "INSERT INTO ServicesAutoStart (MachineID, ServiceName, Service, ServicePath, ServiceHash, CreationTime) VALUES ( '$($machineid)', '$($item)', '$($ServicesStartupItems.$item.Service)', '$($ServicesStartupItems.$item.servicepath)', '$($ServicesStartupItems.$item.servicehash)', '$($ServicesStartupItems.$item.CreationTime)')"
     Invoke-SqliteQuery -Database $Database -query $query2}
 
 $StartupFolderItems = invoke-command -ComputerName $hostname -ScriptBlock $GetStartupFolderItemsScriptBlock
@@ -180,13 +206,17 @@ $query2 = "
     Value TEXT,
     Valuepath TEXT,
     Filehash TEXT,
+    CreationTime TEXT,
     FOREIGN KEY (MachineID) REFERENCES Hosts(MachineID))"
 $query3 = "
     CREATE TABLE ServicesAutoStart (
     EntryID INTEGER PRIMARY KEY AUTOINCREMENT,
     MachineID INTEGER,
     ServiceName TEXT,
+    Service TEXT,
     ServicePath TEXT,
+    ServiceHash TEXT,
+    CreationTime TEXT,
     FOREIGN KEY (MachineID) REFERENCES Hosts(MachineID))"
 $query4 = "
     CREATE TABLE ScheduledTasks (
@@ -194,6 +224,9 @@ $query4 = "
     MachineID INTEGER,
     TaskName TEXT,
     BinaryPath TEXT,
+    ResolvedPath TEXT,
+    FileHash TEXT,
+    CreationTime TEXT,
     FOREIGN KEY (MachineID) REFERENCES Hosts(MachineID))"
 $query5 = "
     CREATE TABLE StartupFolderItems (
